@@ -1,4 +1,4 @@
-# check-mate
+# Chess-mate
 
 A Streamlit app for quick analysis of chess.com games on the phone, right after a game.
 See `ROADMAP.md` for what each version contains.

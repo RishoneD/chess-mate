@@ -1,4 +1,4 @@
-# Run check-mate locally.
+# Run Chess-mate locally.
 # The venv and Stockfish live outside the synced folder (under %LOCALAPPDATA%).
 $ErrorActionPreference = "Stop"
 

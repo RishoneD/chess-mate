@@ -1,4 +1,4 @@
-# check-mate – ROADMAP
+# Chess-mate – ROADMAP
 
 Source of truth for versions. The current version number is set in `version.py` and shown on screen.
 
@@ -24,7 +24,10 @@ Source of truth for versions. The current version number is set in `version.py` 
 - [x] Counts table for all 7 categories (me / opponent), "Highlights" tab with my great moves, ★ on the chart
 - [x] Copy summary includes up to 2 of my great moves
 
-### v0.4 – Fixes and analysis quality (current)
+### v0.5 – Rename (current)
+- [x] App renamed to "Chess-mate" (title, browser tab, footer, User-Agent, docs)
+
+### v0.4 – Fixes and analysis quality (done)
 - [x] Game times shown in local time (Asia/Jerusalem by default, `APP_TIMEZONE` to override)
 - [x] Finished analyses kept server-side (up to 30), so a page reload does not re-run the engine
 - [x] Engine crash / failure shows a clear message and a "Try again" button

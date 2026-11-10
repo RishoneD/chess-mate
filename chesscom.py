@@ -13,7 +13,7 @@ from version import VERSION
 
 API_BASE = "https://api.chess.com/pub/player"
 # chess.com requires an identifying User-Agent. Personal contact details are deliberately omitted.
-USER_AGENT = f"check-mate/{VERSION} (personal game analysis app; chess.com user: first_div)"
+USER_AGENT = f"Chess-mate/{VERSION} (personal game analysis app; chess.com user: first_div)"
 TIMEOUT_S = 15
 MAX_ARCHIVES = 3  # the latest month and up to two months before it
 # chess.com timestamps are UTC; show them in the player's local time

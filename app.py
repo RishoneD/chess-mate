@@ -1,4 +1,4 @@
-"""check-mate: quick post-game analysis of chess.com games, built for the phone."""
+"""Chess-mate: quick post-game analysis of chess.com games, built for the phone."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ CATEGORY_COLOR = {
     "inaccuracy": "#f2b705", "mistake": "#f57c00", "blunder": "#e53935",
 }
 
-st.set_page_config(page_title="check-mate", page_icon="♟️", layout="centered")
+st.set_page_config(page_title="Chess-mate", page_icon="♟️", layout="centered")
 
 st.markdown(
     """
@@ -191,7 +191,7 @@ def move_cards(reports: list[MoveReport]) -> str:
 
 # ---------- UI ----------
 
-st.markdown(f'<p class="cm-title">♟️ check-mate<span class="cm-ver">v{VERSION}</span></p>',
+st.markdown(f'<p class="cm-title">♟️ Chess-mate<span class="cm-ver">v{VERSION}</span></p>',
             unsafe_allow_html=True)
 
 with st.expander("⚙️ Settings"):
@@ -261,4 +261,4 @@ st.markdown("### 📋 Copy summary")
 st.caption("Tap the copy icon in the corner of the box and paste it into a chat with Claude.")
 st.code(build_summary(meta, reports), language=None, wrap_lines=True)
 
-st.caption(f"check-mate v{VERSION} · Stockfish analysis · data from the public chess.com API")
+st.caption(f"Chess-mate v{VERSION} · Stockfish analysis · data from the public chess.com API")
