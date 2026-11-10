@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Chess-Mate</title>
+<meta name="theme-color" content="#1f2a44">
+<meta name="description" content="Quick Stockfish analysis of your latest chess.com games.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Chess-Mate">
+<style>
+  html, body { margin: 0; height: 100%; background: #ffffff; overflow: hidden; }
+  iframe { border: 0; width: 100%; height: 100%; display: block; }
+</style>
+</head>
+<body>
+<!--
+  Installable wrapper for the Streamlit app. The app itself runs unchanged on
+  Streamlit Community Cloud; this page only supplies the app name and icon that
+  Chrome uses when the app is installed (see ROADMAP.md, v0.6).
+-->
+<iframe src="https://chess-mate.streamlit.app/?embed=true"
+        title="Chess-Mate"
+        allow="clipboard-write; clipboard-read"></iframe>
+<script>
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("sw.js").catch(function () {});
+  }
+</script>
+</body>
+</html>
