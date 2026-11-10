@@ -1,0 +1,29 @@
+# check-mate
+
+A Streamlit app for quick analysis of chess.com games on the phone, right after a game.
+See `ROADMAP.md` for what each version contains.
+
+## Running locally (Windows)
+
+```powershell
+.\run_local.ps1
+```
+
+The script uses the venv at `%LOCALAPPDATA%\venvs\check-mate` and Stockfish at `%LOCALAPPDATA%\check-mate-tools\stockfish`, both outside the synced folder. You can also set `STOCKFISH_PATH` yourself.
+
+Tests:
+
+```powershell
+& "$env:LOCALAPPDATA\venvs\check-mate\Scripts\python.exe" -m pytest -q
+```
+
+## Deploying to Streamlit Community Cloud
+- Main file: `app.py`
+- Python: 3.12 (in Advanced settings when deploying)
+- Stockfish is installed from `packages.txt` (on Debian it lives at `/usr/games/stockfish`; the code finds it automatically)
+- No secrets are needed. If any are needed later: only via Streamlit Secrets or environment variables, never in git.
+
+## Optional environment variables
+- `STOCKFISH_PATH`: path to the engine
+- `CHESSCOM_USER`: default username (default: `first_div`)
+- `APP_TIMEZONE`: time zone for game times (default: `Asia/Jerusalem`)

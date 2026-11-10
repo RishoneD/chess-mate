@@ -1,0 +1,13 @@
+# Secrets: only via Streamlit Secrets or environment variables
+.streamlit/secrets.toml
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+
+# Local tooling
+.claude/settings.local.json

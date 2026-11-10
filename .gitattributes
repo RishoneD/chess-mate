@@ -1,0 +1,3 @@
+# Keep LF line endings everywhere (the app is deployed on Linux)
+* text=auto eol=lf
+*.ps1 text eol=crlf
