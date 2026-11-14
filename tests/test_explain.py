@@ -41,3 +41,12 @@ def test_fork_targets_ignore_defended_equal_pieces():
     board = chess.Board("4k3/1p1r4/2n5/4N3/8/8/8/4K3 w - - 0 1")
     targets = _fork_targets(board, chess.E5)
     assert targets == [(chess.ROOK, chess.D7)]
+
+
+def test_unmatched_losses_queen_trade_does_not_hide_a_lost_bishop():
+    from explain import _unmatched_losses
+    w, b = chess.WHITE, chess.BLACK
+    # 27. Bd4 Qxd4 28. Qxd4 Rxd4: White loses the bishop and the queen, Black only the queen
+    caps = [(w, chess.BISHOP), (b, chess.QUEEN), (w, chess.QUEEN)]
+    assert _unmatched_losses(caps, w) == [chess.BISHOP]
+    assert _unmatched_losses([(w, chess.KNIGHT), (b, chess.BISHOP)], w) == []

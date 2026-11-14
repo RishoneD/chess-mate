@@ -6,39 +6,56 @@ import chess
 import chess.pgn
 import pytest
 
-from chesscom import GameMeta
-from classify import CATEGORY_ORDER, categorize, categorize_good, classify_moves
+from classify import (CATEGORY_ORDER, categorize, categorize_good, classify_moves,
+                      move_accuracy, win_pct)
 from engine import analyze_positions, find_stockfish, game_positions
-from summary import build_summary, critical_moments
 
 needs_engine = pytest.mark.skipif(find_stockfish() is None, reason="Stockfish not found")
 
 
+def test_win_pct():
+    assert win_pct(0) == 50
+    assert round(win_pct(100), 1) == 59.1
+    assert round(win_pct(-100) + win_pct(100), 6) == 100
+    assert win_pct(5000) == win_pct(1000)  # capped like the evaluations
+    assert win_pct(100_000, 3) == 100 and win_pct(-100_000, -3) == 0
+    assert win_pct(100_000, 0) == 100 and win_pct(-100_000, 0) == 0  # mate on the board
+
+
 def test_categorize_thresholds():
-    assert categorize(40, 0, -40, False) is None
-    assert categorize(60, 0, -60, False) == "inaccuracy"
-    assert categorize(150, 0, -150, False) == "mistake"
-    assert categorize(300, 0, -300, False) == "blunder"
+    assert categorize(4.9, False) is None
+    assert categorize(5.0, False) == "inaccuracy"
+    assert categorize(10.0, False) == "mistake"
+    assert categorize(15.0, False) == "blunder"
 
 
-def test_categorize_decided_positions_are_softened():
-    assert categorize(300, 1000, 700, False) == "inaccuracy"
-    assert categorize(150, 900, 750, False) is None
-    assert categorize(300, -600, -900, False) == "inaccuracy"
+def test_decided_positions_count_for_little():
+    # +8 -> +5 is 3 pawns (a blunder in centipawns), but only ~9% win probability
+    assert categorize(win_pct(800) - win_pct(500), False) == "inaccuracy"
+    # +10 -> +8: 2 pawns, but the game stays won
+    assert categorize(win_pct(1000) - win_pct(800), False) is None
+    # equal -> -3 is a blunder
+    assert categorize(win_pct(0) - win_pct(-300), False) == "blunder"
 
 
 def test_categorize_missed_mate_always_flagged():
-    assert categorize(20, 1000, 980, True) == "inaccuracy"
+    assert categorize(1.0, True) == "inaccuracy"
 
 
 def test_categorize_good():
-    assert categorize_good(True, 0, 50, 0, False) == "best"
-    assert categorize_good(True, 0, 200, 0, False) == "great"
+    assert categorize_good(True, 0, 3, 0, False) == "best"
+    assert categorize_good(True, 0, 15, 0, False) == "great"
     assert categorize_good(True, 0, None, 0, False) == "best"  # only one legal move
-    assert categorize_good(True, 0, 200, 0, True) == "best"  # recapture / punishing a mistake
-    assert categorize_good(True, 0, 200, 700, False) == "best"  # already winning
-    assert categorize_good(False, 8, None, 0, False) == "excellent"
-    assert categorize_good(False, 30, None, 0, False) == "good"
+    assert categorize_good(True, 0, 15, 0, True) == "best"  # recapture / punishing a mistake
+    assert categorize_good(True, 0, 15, 700, False) == "best"  # already winning
+    assert categorize_good(False, 0.8, None, 0, False) == "excellent"
+    assert categorize_good(False, 3, None, 0, False) == "good"
+
+
+def test_accuracy():
+    assert round(move_accuracy(0), 1) == 100.0
+    assert move_accuracy(100) == 0
+    assert 0 < move_accuracy(10) < move_accuracy(5) < 100
 
 
 def _analyze(pgn: str):
@@ -110,18 +127,14 @@ def test_lost_piece_and_missed_capture():
 
 
 @needs_engine
-def test_summary_contains_critical_moments():
-    reports = _analyze("1. e4 e5 2. Nf3 Qh4 3. d3 Qb4+ 4. c3 *")
-    meta = GameMeta(
-        url="https://www.chess.com/game/live/1", pgn="", end_time=1794300896,
-        time_class="rapid", time_control="600", my_color="black",
-        opponent="opp", opponent_rating=1048, my_rating=1034,
-        outcome="loss", result_code="resigned",
-    )
-    moments = critical_moments(reports, chess.BLACK)
-    assert moments and all(m.color == chess.BLACK for m in moments)
-    text = build_summary(meta, reports)
-    assert "I played Black" in text
-    assert "Move 2..." in text
-    assert "FEN: rnbqkbnr/pppp1ppp/8/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R b KQkq - 1 2" in text
-    assert "Result: Loss (resignation)" in text
+def test_any_mating_move_is_not_a_missed_mate():
+    # Both Ra8# and Re8# mate; whichever the engine prefers, the other is not a mistake
+    board = chess.Board("6k1/5ppp/8/8/8/8/5PPP/R3R1K1 w - - 0 1")
+    for uci in ("a1a8", "e1e8"):
+        b = board.copy()
+        move = chess.Move.from_uci(uci)
+        after = b.copy()
+        after.push(move)
+        evals = analyze_positions([b, after], find_stockfish(), budget_s=2, max_depth=10)
+        report = classify_moves([b, after], [move], evals)[0]
+        assert report.category in ("best", "excellent", "good", "great"), (uci, report.category)

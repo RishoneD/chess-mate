@@ -50,3 +50,35 @@ def test_parse_draw_and_variants():
     assert g.outcome_label == "Draw (repetition)"
     assert parse_game(_raw(rules="chess960"), "first_div") is None
     assert parse_game(_raw(white="a", black="b"), "first_div") is None
+
+
+class _FailingSession:
+    """A requests.Session stand-in whose responses all fail with the given status."""
+
+    def __init__(self, status: int):
+        self.status = status
+
+    def get(self, url, headers=None, timeout=None):
+        import requests
+        resp = requests.Response()
+        resp.status_code = self.status
+        resp.url = url
+        return resp
+
+
+def test_api_failure_raises_a_clear_error():
+    import pytest
+    import requests
+    from chesscom import fetch_recent_games
+    with pytest.raises(requests.HTTPError, match="503"):
+        fetch_recent_games("first_div", session=_FailingSession(503))
+    with pytest.raises(requests.HTTPError, match="404"):
+        fetch_recent_games("no_such_user_xyz", session=_FailingSession(404))
+
+
+def test_stockfish_not_found(monkeypatch):
+    import engine
+    monkeypatch.setenv("STOCKFISH_PATH", "Z:/nowhere/stockfish.exe")
+    monkeypatch.setattr(engine.shutil, "which", lambda name: None)
+    monkeypatch.setattr(engine, "Path", lambda p: type("P", (), {"is_file": lambda self: False})())
+    assert engine.find_stockfish() is None

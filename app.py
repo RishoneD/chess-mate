@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import io
+import json
 import os
 import threading
 from collections import OrderedDict
@@ -12,11 +13,13 @@ import altair as alt
 import chess
 import chess.pgn
 import pandas as pd
+import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 from chesscom import GameMeta, fetch_recent_games
 from classify import (CATEGORY_ICON, CATEGORY_LABEL, CATEGORY_ORDER, EVAL_CAP, MISTAKES,
-                      MoveReport, classify_moves, count_categories, is_mistake)
+                      MoveReport, classify_moves, count_categories, game_accuracy, is_mistake)
 from engine import DEFAULT_BUDGET_S, analyze_positions, find_stockfish, game_positions
 from summary import build_summary
 from version import VERSION
@@ -85,6 +88,18 @@ class AnalysisStore:
 @st.cache_resource
 def analysis_store() -> AnalysisStore:
     return AnalysisStore()
+
+
+def load_error_message(username: str, exc: Exception) -> str:
+    """A clear message for a failure to load games from chess.com."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 404:
+        return f'chess.com user "{username}" was not found. Check the username in ⚙️ Settings.'
+    if status is not None:
+        return f"chess.com is not responding properly right now (HTTP {status}). Try again in a minute."
+    if isinstance(exc, requests.RequestException):
+        return f"Could not reach chess.com ({type(exc).__name__}). Check the internet connection and try again."
+    return f"Could not load games from chess.com ({type(exc).__name__}: {exc})."
 
 
 def game_label(g: GameMeta) -> str:
@@ -178,15 +193,53 @@ def move_cards(reports: list[MoveReport]) -> str:
     for r in reports:
         if is_mistake(r.category):
             best = f"Best: {html.escape(r.best_san)} · " if r.best_san else ""
-            footer = f"<br><small>{best}Loss {r.loss / 100:.1f}</small>"
+            footer = f"<br><small>{best}Win% −{r.win_drop:.0f}</small>"
+            text = r.explanation or "No tactic detected"
         else:
             footer = ""
+            text = r.explanation or ""
         cards.append(
             f'<div class="cm-card" style="--c:{CATEGORY_COLOR[r.category]}">'
             f"<b>{CATEGORY_ICON[r.category]} {CATEGORY_LABEL[r.category]}</b> · {html.escape(r.full_label)}<br>"
-            f"{html.escape(r.explanation or '')}{footer}</div>"
+            f"{html.escape(text)}{footer}</div>"
         )
     return "".join(cards)
+
+
+def copy_button(text: str) -> None:
+    """A "Copy summary" button (st.code's own copy icon is small on a phone).
+    Runs in a component iframe. execCommand("copy") goes first because it reports success
+    synchronously; the Clipboard API is the fallback (its promise was seen to stay pending
+    in some browsers even after the text was copied)."""
+    components.html(
+        f"""
+<button id="b" style="width:100%;padding:.6rem;font-size:1rem;border-radius:.5rem;
+  border:1px solid rgba(128,128,128,.4);background:#4c8bf5;color:#fff;cursor:pointer;
+  font-family:sans-serif">📋 Copy summary</button>
+<script>
+const text = {json.dumps(text)};
+const b = document.getElementById("b");
+function done(ok) {{
+  b.textContent = ok ? "✅ Copied" : "Copy failed: use the icon on the box below";
+  setTimeout(() => b.textContent = "📋 Copy summary", 2500);
+}}
+function execCopy() {{
+  const t = document.createElement("textarea");
+  t.value = text; t.setAttribute("readonly", ""); t.style.position = "fixed"; t.style.opacity = "0";
+  document.body.appendChild(t); t.select(); t.setSelectionRange(0, text.length);
+  let ok = false;
+  try {{ ok = document.execCommand("copy"); }} catch (e) {{}}
+  t.remove(); return ok;
+}}
+b.addEventListener("click", () => {{
+  if (execCopy()) {{ done(true); return; }}
+  if (navigator.clipboard) {{
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+  }} else {{ done(false); }}
+}});
+</script>""",
+        height=52,
+    )
 
 
 # ---------- UI ----------
@@ -208,7 +261,9 @@ if not engine_path:
 try:
     games = load_games(username)
 except Exception as exc:  # noqa: BLE001 - show any network/API failure to the user
-    st.error(f"Could not load games: {exc}")
+    st.error(load_error_message(username, exc))
+    if st.button("🔁 Try again"):
+        load_games.clear()
     st.stop()
 
 if not games:
@@ -240,6 +295,12 @@ st.markdown(
     f' · <a href="{html.escape(meta.url)}">Open on chess.com</a></p>',
     unsafe_allow_html=True,
 )
+acc_me, acc_opp = game_accuracy(reports, my_color), game_accuracy(reports, not my_color)
+if acc_me is not None or acc_opp is not None:
+    def _acc(a: float | None) -> str:
+        return f"{a:.1f}%" if a is not None else "n/a"
+    st.markdown(f'<p class="cm-meta">Accuracy: you {_acc(acc_me)} · opponent {_acc(acc_opp)}</p>',
+                unsafe_allow_html=True)
 st.markdown(counts_table(reports, my_color), unsafe_allow_html=True)
 st.altair_chart(eval_chart(result["evals"], reports, my_color), width="stretch")
 st.caption("Up = your advantage · ● me ▲ opponent · 🟡 inaccuracy 🟠 mistake 🔴 blunder · ★ great move")
@@ -258,7 +319,10 @@ with tab_hi:
     st.markdown(move_cards(highlights) or "No only-moves found in this game.", unsafe_allow_html=True)
 
 st.markdown("### 📋 Copy summary")
-st.caption("Tap the copy icon in the corner of the box and paste it into a chat with Claude.")
-st.code(build_summary(meta, reports), language=None, wrap_lines=True)
+st.caption("Copy the summary and paste it into a chat with Claude "
+           "(the button, or the copy icon in the corner of the box).")
+summary_text = build_summary(meta, reports)
+copy_button(summary_text)
+st.code(summary_text, language=None, wrap_lines=True)
 
 st.caption(f"Chess-mate v{VERSION} · Stockfish analysis · data from the public chess.com API")

@@ -23,6 +23,9 @@ Tests:
 - Stockfish is installed from `packages.txt` (on Debian it lives at `/usr/games/stockfish`; the code finds it automatically)
 - No secrets are needed. If any are needed later: only via Streamlit Secrets or environment variables, never in git.
 
+## Copy summary (Format v2)
+The "Copy summary" text is meant to be pasted into a chat with Claude. Its first line is always `Chess game analysis (chess.com) | Format: v2`; `summary.py` holds the layout and `FORMAT_VERSION`. All evaluations are from the user's point of view, and moves are classified by the drop in win probability (lichess formula, see `classify.py`).
+
 ## Installing on the phone (Chess-Mate name and icon)
 Streamlit Community Cloud serves its own page around the app, so installing `chess-mate.streamlit.app` directly shows up as "Streamlit". The `docs/` folder is a small wrapper page with its own manifest and icons that shows the app in a full-screen iframe.
 

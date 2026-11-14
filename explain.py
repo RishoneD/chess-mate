@@ -13,6 +13,7 @@ PIECE_VALUE = {
 LINE_PLIES = 6  # how many plies ahead to compare material
 MATERIAL_THRESHOLD = 2  # minimum material difference (points) that counts as losing a piece
 MIN_LOSS_FOR_MATERIAL = 150  # centipawns; below this we make no claims about material
+MIN_LINE_PLIES = 4  # shorter engine lines are not used for material claims
 
 
 def material(board: chess.Board, color: chess.Color) -> int:
@@ -69,8 +70,9 @@ def explain(
     loss_cp: int,
     before_cp: int,
     after_cp: int,
-) -> str:
-    """One-line explanation. before_cp / after_cp are from the mover's point of view."""
+) -> str | None:
+    """One-line tactical explanation, or None when no rule matches.
+    before_cp / after_cp are from the mover's point of view."""
     mover = board.turn
     mate_before = pov_mate(ev_before, mover)
     mate_after = pov_mate(ev_after, mover)
@@ -80,24 +82,28 @@ def explain(
         return f"Allowed mate in {abs(mate_after)}"
 
     # 2. Missed mate
-    if mate_before is not None and mate_before > 0 and not (mate_after is not None and mate_after > 0):
+    if mate_before is not None and mate_before > 0 and not (mate_after is not None and mate_after >= 0):
         return f"Missed mate in {mate_before}"
 
     # 3. Material: compare the engine's best line with the line after the move played
     best_line = list(ev_before.pv)
     played_line = [move.uci(), *ev_after.pv]
-    if best_line:
-        n = _even_length(best_line, played_line)
+    # The engine's PV can be cut short (1–3 plies) and stop in the middle of an exchange:
+    # "lost" claims need a played line of MIN_LINE_PLIES, "missed" claims a best line of 2.
+    n_played = _even_length(played_line)
+    n_best = _even_length(best_line)
+    played_ok = n_played >= MIN_LINE_PLIES
+    if best_line and (played_ok or n_best >= 2):
         start = material(board, mover)
-        best_end, _ = play_line(board, best_line, n)
-        played_end, played_caps = play_line(board, played_line, n)
+        best_end, _ = play_line(board, best_line, n_best)
+        played_end, played_caps = play_line(board, played_line, n_played)
         best_mat = material(best_end, mover)
-        played_mat = material(played_end, mover)
+        played_mat = material(played_end, mover) if played_ok else start
 
         # Only talk about material when the evaluation dropped accordingly;
         # otherwise it is just an exchange in the middle of the line.
         if best_mat - played_mat >= MATERIAL_THRESHOLD and loss_cp >= MIN_LOSS_FOR_MATERIAL:
-            if played_mat - start <= -MATERIAL_THRESHOLD:
+            if played_ok and played_mat - start <= -MATERIAL_THRESHOLD:
                 tactic = _allowed_tactic(board, move, ev_after)
                 if tactic:
                     return tactic
@@ -128,15 +134,8 @@ def explain(
 
             return f"Missed a material gain (~{best_mat - played_mat} points)"
 
-    # 4. Fallback: describe the evaluation drop (no signed numbers, to avoid point-of-view confusion)
-    opp_edge = "a decisive advantage" if after_cp <= -300 else "the advantage"
-    if before_cp >= 50 and after_cp <= -50:
-        return f"Turned your advantage around: now your opponent has {opp_edge}"
-    if -50 < before_cp < 50 and after_cp <= -50:
-        return f"From an equal position, your opponent now has {opp_edge}"
-    if before_cp >= 50 and after_cp < 50:
-        return "Gave away your advantage"
-    return f"Lost about {loss_cp / 100:.1f} pawns of evaluation"
+    # 4. Nothing recognized: say so rather than guess (the evaluation numbers are shown separately)
+    return None
 
 
 def _and_list(targets: list[tuple[chess.PieceType, chess.Square]]) -> str:
@@ -207,9 +206,12 @@ def _allowed_tactic(board: chess.Board, move: chess.Move, ev_after: PositionEval
 def _unmatched_losses(captures: list[tuple[chess.Color, chess.PieceType]],
                       mover: chess.Color) -> list[chess.PieceType]:
     """Mover's pieces captured without compensation of equal or higher value (trades cancel out)."""
-    gained = [pt for c, pt in captures if c != mover]
+    gained = sorted((pt for c, pt in captures if c != mover), key=lambda p: PIECE_VALUE[p])
+    lost = sorted((pt for c, pt in captures if c == mover), key=lambda p: -PIECE_VALUE[p])
     unmatched = []
-    for piece in (pt for c, pt in captures if c == mover):
+    # Most valuable losses first, each matched with the cheapest capture that is worth as much
+    # (so a queen trade cancels out and a lost bishop is not "paid for" by the enemy queen).
+    for piece in lost:
         match = next((g for g in gained if PIECE_VALUE[g] >= PIECE_VALUE[piece]), None)
         if match is None:
             unmatched.append(piece)

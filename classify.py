@@ -1,7 +1,8 @@
-"""Classify every move by centipawn loss: good moves and mistakes."""
+"""Classify every move by the drop in win probability (lichess formula): good moves and mistakes."""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import chess
@@ -9,15 +10,20 @@ import chess
 from engine import PositionEval
 from explain import explain, pov_mate
 
-EVAL_CAP = 1000  # cap evaluations at ±10 pawns before computing loss
-WINNING = 500  # above this (or below minus this) the position is decided
-EXCELLENT_MAX = 10  # centipawn loss up to which a non-best move is "excellent"
-ONLY_MOVE_GAP = 150  # the second-best move must be at least this much worse for an "only move"
+EVAL_CAP = 1000  # cap evaluations at ±10 pawns (charts, and before converting to win%)
+# Win probability from centipawns, as on lichess: 50 + 50 * (2 / (1 + exp(-k * cp)) - 1)
+WIN_K = 0.00368208
+# Severity thresholds on the drop of the mover's win% (lichess: 0.1/0.2/0.3 in winning chances).
+# Near equality they match ~55/110/175 centipawns; in decided positions the curve is flat,
+# so a large centipawn swing there counts for little (no separate softening rule needed).
+WIN_THRESHOLDS = [(15.0, "blunder"), (10.0, "mistake"), (5.0, "inaccuracy")]
+WINNING = 500  # centipawns: beyond ±this the position is decided ("great" moves are not counted)
+EXCELLENT_MAX = 1.0  # win% drop up to which a non-best move is "excellent" (~10 cp near equality)
+ONLY_MOVE_GAP = 10.0  # win%: the second-best move must be at least this much worse for an "only move"
 # Without an opening book, small engine preferences in the opening are noise:
 # inaccuracies in the first OPENING_MOVES moves are not flagged (mistakes and blunders still are).
 OPENING_MOVES = 8
 
-THRESHOLDS = [(200, "blunder"), (100, "mistake"), (50, "inaccuracy")]
 GOOD = ["great", "best", "excellent", "good"]
 MISTAKES = ["inaccuracy", "mistake", "blunder"]
 CATEGORY_ORDER = GOOD + MISTAKES  # display order, best to worst
@@ -35,6 +41,41 @@ def is_mistake(category: str | None) -> bool:
     return category in MISTAKES
 
 
+def capped(cp: int) -> int:
+    return max(-EVAL_CAP, min(EVAL_CAP, cp))
+
+
+def win_pct(cp: int, mate: int | None = None) -> float:
+    """Win probability (0–100) for the side whose point of view cp/mate are in.
+    Mate: 100 if that side mates (or has mated), 0 if it gets mated."""
+    if mate is not None:
+        return 100.0 if (mate > 0 or (mate == 0 and cp > 0)) else 0.0
+    return 50 + 50 * (2 / (1 + math.exp(-WIN_K * capped(cp))) - 1)
+
+
+def eval_win_pct(ev: PositionEval, color: chess.Color) -> float:
+    """Win% of `color` for an engine evaluation (which is from White's view)."""
+    sign = 1 if color == chess.WHITE else -1
+    mate = None if ev.mate is None else ev.mate * sign
+    return win_pct(ev.cp * sign, mate)
+
+
+def move_accuracy(win_drop: float) -> float:
+    """lichess per-move accuracy from the drop in win%."""
+    return max(0.0, min(100.0, 103.1668 * math.exp(-0.04354 * win_drop) - 3.1669))
+
+
+def game_accuracy(reports: list["MoveReport"], color: chess.Color) -> float | None:
+    """Mean of the arithmetic and harmonic means of per-move accuracy (no volatility weighting,
+    so it is close to, but not the same as, lichess or chess.com)."""
+    accs = [move_accuracy(r.win_drop) for r in reports if r.color == color]
+    if not accs:
+        return None
+    mean = sum(accs) / len(accs)
+    harmonic = len(accs) / sum(1 / max(a, 1.0) for a in accs)
+    return (mean + harmonic) / 2
+
+
 @dataclass(frozen=True)
 class MoveReport:
     ply: int  # index of the move in the game (0 = first move)
@@ -49,44 +90,46 @@ class MoveReport:
     eval_after: int
     mate_before: int | None  # White's view, as in PositionEval
     mate_after: int | None
-    loss: int  # from the mover's point of view
+    loss: int  # centipawns, from the mover's point of view
+    win_before: float  # mover's win%, before and after the move
+    win_after: float
+    win_drop: float  # mover's win% lost by this move (0 when the best move was played)
     category: str  # one of CATEGORY_ORDER
-    explanation: str | None  # for mistakes and great moves
+    explanation: str | None  # for mistakes (None = no tactic detected) and great moves
+    pv_best: tuple[str, ...] = ()  # UCI line from fen_before, starting with the best move
+    pv_after: tuple[str, ...] = ()  # UCI line after the move played (opponent's best reply first)
 
     @property
     def full_label(self) -> str:
         return f"{self.move_label}{self.san}"
 
+    @property
+    def played_best(self) -> bool:
+        return self.best_uci == self.uci
 
-def capped(cp: int) -> int:
-    return max(-EVAL_CAP, min(EVAL_CAP, cp))
 
-
-def categorize(loss: int, before: int, after: int, missed_mate: bool) -> str | None:
-    """Mistake category, or None. before/after are from the mover's point of view, after capping."""
-    category = next((name for limit, name in THRESHOLDS if loss >= limit), None)
-    decided = after >= WINNING or before <= -WINNING
-    if category and decided:
-        # in a decided position a large loss matters less
-        category = "inaccuracy" if loss >= 200 else None
+def categorize(win_drop: float, missed_mate: bool) -> str | None:
+    """Mistake category from the mover's win% drop, or None."""
+    category = next((name for limit, name in WIN_THRESHOLDS if win_drop >= limit), None)
     if missed_mate and category is None:
         category = "inaccuracy"
     return category
 
 
-def categorize_good(played_best: bool, loss: int, gap: int | None,
-                    before: int, trivial: bool) -> str:
+def categorize_good(played_best: bool, win_drop: float, gap: float | None,
+                    before_cp: int, trivial: bool) -> str:
     """Category for a move that is not a mistake.
 
-    gap: how much worse the second-best move is (mover's view), None if there was only one legal move.
+    gap: how much worse (in win%) the second-best move is, None if there was only one legal move.
+    before_cp: evaluation before the move, mover's view, capped.
     trivial: a recapture or the capture punishing an opponent's mistake; never counted as "great".
     """
     if played_best:
-        undecided = -WINNING < before < WINNING
+        undecided = -WINNING < before_cp < WINNING
         if gap is not None and gap >= ONLY_MOVE_GAP and undecided and not trivial:
             return "great"
         return "best"
-    return "excellent" if loss <= EXCELLENT_MAX else "good"
+    return "excellent" if win_drop <= EXCELLENT_MAX else "good"
 
 
 def _san_or_none(board: chess.Board, uci: str | None) -> str | None:
@@ -111,11 +154,14 @@ def classify_moves(
         after = capped(ev_a.cp) * sign
         played_best = ev_b.best_move == move.uci()
         loss = 0 if played_best else max(0, before - after)
+        win_b, win_a = eval_win_pct(ev_b, mover), eval_win_pct(ev_a, mover)
+        win_drop = 0.0 if played_best else max(0.0, win_b - win_a)
 
         mate_b, mate_a = pov_mate(ev_b, mover), pov_mate(ev_a, mover)
         missed_mate = (not played_best and mate_b is not None and mate_b > 0
-                       and not (mate_a is not None and mate_a > 0))
-        category = categorize(loss, before, after, missed_mate)
+                       # mate_a == 0: the move itself delivered mate (any mating move will do)
+                       and not (mate_a is not None and mate_a >= 0))
+        category = categorize(win_drop, missed_mate)
         if category == "inaccuracy" and board.fullmove_number <= OPENING_MOVES and not missed_mate:
             category = None
 
@@ -125,20 +171,22 @@ def classify_moves(
         else:
             gap = None
             if ev_b.second_cp is not None:
-                gap = before - capped(ev_b.second_cp) * sign
+                second_mate = None if ev_b.second_mate is None else ev_b.second_mate * sign
+                gap = win_b - win_pct(ev_b.second_cp * sign, second_mate)
             prev_move = moves[i - 1] if i > 0 else None
             recapture = (prev_move is not None and boards[i - 1].is_capture(prev_move)
                          and move.to_square == prev_move.to_square)
             punishes = (board.is_capture(move) and bool(reports)
                         and is_mistake(reports[-1].category))
-            category = categorize_good(played_best, loss, gap, before, recapture or punishes)
+            category = categorize_good(played_best, win_drop, gap, before, recapture or punishes)
             if category == "great":
                 second = _san_or_none(board, ev_b.second_move) or "the alternative"
                 second_mate = (ev_b.second_mate * sign) if ev_b.second_mate is not None else None
                 if second_mate is not None and second_mate < 0:
                     explanation = f"Only move: every alternative allows mate (e.g. {second} allows mate in {-second_mate})"
                 else:
-                    explanation = f"Only good move: the next best ({second}) was {gap / 100:.1f} pawns worse"
+                    explanation = (f"Only good move: the next best ({second}) "
+                                   f"would cost {gap:.0f}% win probability")
 
         num = board.fullmove_number
         reports.append(MoveReport(
@@ -155,8 +203,13 @@ def classify_moves(
             mate_before=ev_b.mate,
             mate_after=ev_a.mate,
             loss=loss,
+            win_before=win_b,
+            win_after=win_a,
+            win_drop=win_drop,
             category=category,
             explanation=explanation,
+            pv_best=ev_b.pv,
+            pv_after=ev_a.pv,
         ))
     return reports
 
